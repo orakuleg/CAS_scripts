@@ -1,0 +1,2 @@
+This is example of role that requesting version of jar file from consul and after that is transferring a jar-file to target host.
+After transferring project can operate with file in three ways: execute on spark one-time, execute one-time and write a schedule to it into cron and just update file.
