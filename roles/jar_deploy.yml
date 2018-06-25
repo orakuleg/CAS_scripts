@@ -1,0 +1,204 @@
+#### setting facts about spark
+
+- set_fact:
+    spark_directory: "{{ spark_installation_directory_20 }}"
+
+- set_fact:
+    spark_directory: "{{ spark_installation_directory_22 }}"
+  when: ( spark_version == "spark-2.2.0" ) and ( spark_installation_directory_22 is defined )
+
+- debug: msg="Using version {{ spark_version }} and directory {{ spark_directory }}"
+
+- debug: msg="Directory for spark version {{ spark_version }} is undefined. Using spark-2.0.0"
+  when: ( spark_version == "spark-2.2.0" ) and ( spark_installation_directory_22 is undefined )
+
+#### import classes
+
+- include: classes.yml
+#- import_playbook: classes.yml
+
+#### getting and creating directories for files
+
+- name: Creating log directory.
+  file:
+    path: "{{ spark_log_directory }}"
+    state: directory
+    mode: 0777
+
+- name: Creating file directory.
+  file:
+    path: "{{ spark_directory }}/{{ operation_type }}"
+    state: directory
+    mode: 0777
+
+#### getting information about file version
+
+- name: checking common_version_profile
+  set_fact:
+    common_version_profile: 'develop'
+  when: ((common_version_profile is undefined) and (jar_exact_version==""))
+
+- name: GET jar version from the Consul
+  become: no
+  local_action:
+    module: consul_kv
+    host: "{{ common_consul_server }}"
+    key: "cassandra/versions/{{ common_version_profile }}/{{ jar_type }}"
+    cas: 0
+  register: jar_version_tmp
+  when: (jar_exact_version=="")
+
+- set_fact:
+    jar_version: "{{ jar_version_tmp.data.Value }}"
+  when: (jar_exact_version=="")
+
+- set_fact:
+    jar_version: "{{ jar_exact_version }}"
+  when: (jar_exact_version!="")
+
+#### downloading file and transferring on host
+
+- name: Get files from nexus repository
+  local_action:
+    module: maven_artifact
+    repository_url: "{{ common_nexus_repo_url }}/content/groups/cassandra"
+    group_id: com.spark
+    artifact_id: "{{ jar_type }}"
+    version: "{{ jar_version }}"
+    dest: "/tmp/{{ jar_type }}_{{ operation_type }}.jar"
+  register: jar_downloaded
+
+- name: Copy file to destination host
+  copy:
+    src: "/tmp/{{ jar_type }}_{{ operation_type }}.jar"
+    dest: "/tmp/{{ jar_type }}_{{ operation_type }}.jar"
+  when: (jar_downloaded|changed)
+
+- name: Move file to another directory
+  copy:
+    src: "/tmp/{{ jar_type }}_{{ operation_type }}.jar"
+    dest: "{{ spark_directory }}/{{ jar_type }}_{{ operation_type }}_new.jar"
+    remote_src: yes
+  when: (jar_downloaded|changed)
+  register: new_jar_placed
+
+#### part for OTR run
+
+- name: Move file to run
+  copy:
+    src: "{{ spark_directory }}/{{ jar_type }}_{{ operation_type }}_new.jar"
+    dest: "{{ spark_directory }}/{{ jar_type }}_{{ operation_type }}.jar"
+    remote_src: yes
+  when: (operation_type == "OTR")
+
+- set_fact:
+    jar_type: "{{ jar_type }}_{{ operation_type }}"
+  when: (operation_type == "OTR")
+
+- name: Executing jar_OTR file
+  shell: "{{ cron }}"
+  register: jar_OTR_executed
+  when: (operation_type == "OTR")
+
+- name: Sending notification message via Slack
+  become: no
+  local_action:
+    module: slack
+    token: "{{ common_slack_token }}"
+    icon_emoji: ":eye:"
+    msg: "New {{ jar_type }} jar-file from jenkins job *{{ jar_type }}_build* with buildnumber *{{ jar_version }}* is executed one-time on *{{ inventory_hostname }}*"
+    parse: "full"
+  ignore_errors: true
+  when: (jar_OTR_executed|changed)
+
+#### part for update jar-file
+
+- name: Move file to run
+  copy:
+    src: "{{ spark_directory }}/{{ jar_type }}_{{ operation_type }}_new.jar"
+    dest: "{{ spark_directory }}/{{ jar_type }}_new.jar"
+    remote_src: yes
+  when: (operation_type == "file_update") or (operation_type == "file_cron_update")
+
+- name: Make backup of old file
+  copy:
+    src: "{{ spark_directory }}/{{ jar_type }}.jar"
+    dest: "{{ spark_directory }}/{{ jar_type }}_backup.jar"
+    remote_src: yes
+  ignore_errors: true
+  register: jar_file_updated
+  when: (operation_type == "file_update") or (operation_type == "file_cron_update")
+
+- name: Make backup of old file
+  copy:
+    src: "{{ spark_directory }}/{{ jar_type }}_new.jar"
+    dest: "{{ spark_directory }}/{{ jar_type }}.jar"
+    remote_src: yes
+  register: jar_file_replaced
+  when: ((operation_type == "file_update") or (operation_type == "file_cron_update"))
+
+- name: Sending notification message via Slack
+  become: no
+  local_action:
+    module: slack
+    token: "{{ common_slack_token }}"
+    icon_emoji: ":eye:"
+    msg: "New {{ jar_type }} jar-file from jenkins job *{{ jar_type }}_build* with buildnumber *{{ jar_version }}* is replaced on *{{ inventory_hostname }}*"
+    parse: "full"
+  ignore_errors: true
+  when: (jar_file_replaced|changed)
+
+#### part for update cron and jar
+
+- cron:
+    name: "{{ jar_type }}_shedule"
+    cron_file: "{{ jar_type }}_shedule_file"
+    state: absent
+  when: (operation_type == "file_cron_update")
+
+- name: Create entry in cron-file
+  cron:
+    name: "{{ jar_type }}_shedule"
+    weekday: "{{ cron_day_w }}"
+    minute: "{{ cron_min }}"
+    hour: "{{ cron_hrs }}"
+    user: "{{ cron_user }}"
+    job: "/etc/cron.d/{{ jar_type }}_shedule.sh"
+    cron_file: "{{ jar_type }}_shedule_file"
+  when: (operation_type == "file_cron_update")
+  register: cron_changing_done
+
+- name: Cleanup previous install (script)
+  file:
+    path: /etc/cron.d/{{ jar_type }}_shedule.sh
+    state: absent
+  when: (operation_type == "file_cron_update")
+
+- name: Creating new script to run
+  file:
+    path: "/etc/cron.d/{{ jar_type }}_shedule.sh"
+    state: touch
+    mode: 0777
+  when: (operation_type == "file_cron_update")
+
+- name: Filling new script
+  lineinfile:
+    dest: "/etc/cron.d/{{ jar_type }}_shedule.sh"
+    line: "{{ item }}"
+  with_items:
+    - "#!/bin/bash"
+    - "NOW=$(date +%Y-%m-%d_%H-%M)"
+    - "{{ cron }}"
+  when: (operation_type == "file_cron_update")
+  register: script_updated
+
+- name: Sending notification message via Slack
+  become: no
+  local_action:
+    module: slack
+    token: "{{ common_slack_token }}"
+    icon_emoji: ":eye:"
+    msg: "New script installed on *{{ inventory_hostname }}*"
+    parse: "full"
+  ignore_errors: true
+  when: ((jar_file_replaced|changed) and (script_updated|changed))

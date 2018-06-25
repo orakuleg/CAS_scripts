@@ -4,8 +4,8 @@ list_of_keyspaces=()
 ## keyspaces to save
 ######################
 host=$(hostname)
-if [ ! -f /var/lib/cassandra/repair_cassandra.log ]; then
-    touch /var/lib/cassandra/repair_cassandra.log
+if [ ! -f /repair_cassandra.log ]; then
+    touch /repair_cassandra.log
 fi
 #######################################
 # Name:
@@ -91,10 +91,10 @@ function clearing_old_backups {
 #   None
 #######################################
 function repair {
-    nohup nodetool repair -pr -tr -full 1>>/var/lib/cassandra/repair_cassandra.log 2>>/var/lib/cassandra/repair_cassandra.log &
+    nohup nodetool repair -pr -tr -full 1>>/repair_cassandra.log 2>>/repair_cassandra.log &
     sleep $1
     check=$(ps -ef | grep "repair -pr -tr -full" | grep -v grep | awk '{print $2}')
-    check_fin=$(tail -7 /var/lib/cassandra/repair_cassandra.log | grep 'Repair completed successfully')
+    check_fin=$(tail -7 /repair_cassandra.log | grep 'Repair completed successfully')
     if [ "$check" = "" ] && [ "$check_fin" != "" ]
     then
         echo "Process finished successfully. See log for details."
@@ -157,7 +157,7 @@ function restart_f {
 #   None
 #######################################
 function flush {
-    nohup nodetool flush -- 1>>/var/lib/cassandra/repair_flush_cassandra.log 2>>/var/lib/cassandra/repair_flush_cassandra.log &
+    nohup nodetool flush -- 1>>/repair_flush_cassandra.log 2>>/repair_flush_cassandra.log &
 }
 #######################################
 if [ "$1" = "repair" ]

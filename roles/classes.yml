@@ -1,0 +1,14 @@
+- set_fact:
+    jar_class: "class1"
+    jar_date: "dev 2017-10-10"
+  when: (jar_type=="class1")
+
+- set_fact:
+    jar_class: "class2"
+    jar_date: "dev 2017-08-29"
+  when: (jar_type=="class2")
+
+- set_fact:
+    jar_class: "class3"
+    jar_date: "dev 2018-01-01"
+  when: (jar_type=="class3")
